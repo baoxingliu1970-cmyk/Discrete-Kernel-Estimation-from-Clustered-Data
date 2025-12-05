@@ -211,3 +211,24 @@ mise_all_df %>%
   arrange(k, r, Method) %>%
   knitr::kable(caption = "Summary of MISE Results (Parallelized Simulation)")
 ```
+
+```{r}
+library(tidyverse)
+library(kableExtra)
+
+mise_k5_m40 = read_csv("mise_results_k5_m40.csv") %>% mutate(MISE = round(MISE, 5), SD_ISE = round(SD_ISE, 5))
+
+mise = mise_k5_m40$MISE
+even_indices <- seq(from = 2, to = length(mise), by = 2)
+odd_indices <- seq(from = 1, to = length(mise) - 1, by = 2)
+mise[even_indices] <- round(mise[even_indices] / mise[odd_indices]*100,2)
+mise[odd_indices] <- round(mise[odd_indices] / mise[odd_indices]*100,2)
+df_mise = data.frame(Percent = mise)
+mise_k5_m40 = bind_cols(mise_k5_m40, df_mise)
+
+table_mise_k5_m40 <- mise_k5_m40 %>%
+      kable("latex", booktabs = TRUE, caption = "MISE for SRS and clustered descrete kernel estimators when k = 5 and m = 40") %>%
+      kable_styling(latex_options = c("striped", "hold_position"))
+writeLines(table_mise_k5_m40, "table_mise_k5_m40.tex")
+```
+
