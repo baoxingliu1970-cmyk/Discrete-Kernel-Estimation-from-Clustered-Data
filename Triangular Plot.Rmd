@@ -1,0 +1,51 @@
+---
+title: "Triangular Plot"
+author: "Baoxing Liu"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+discrete_triang_kernel <- function(xi, x, h, a) {
+  num <- (a + 1)^h - abs(xi - x)^h
+  num[num < 0] <- 0
+  P_ah <- (2 * a + 1) * (a + 1)^h - 2 * sum((0:a)^h)
+  return(num / P_ah)
+}
+
+a = 4
+c = 5
+xi = 0:10
+h_grid = c(100,10,2,1,1/2,1/10,1/100)
+
+Pr = list()
+for (i in seq_along(h_grid)) {
+  h = h_grid[i]
+  Pr[[i]] = discrete_triang_kernel(xi, c, h, a)
+}
+
+png("tall_plot.png", width = 1000, height = 1200)
+par(mar = c(5, 5, 3, 2))
+plot(xi, Pr[[1]], type = "n",
+     ylim = c(0, 1), xlim = c(0, 10),
+     xlab = "y", ylab = "Probab(y)",
+     main = "Discrete Triangular Distribution")
+lines(xi, Pr[[1]], type = "b", pch = 1, lty = 1)
+lines(xi, Pr[[2]], type = "b", pch = 2, lty = 2)
+lines(xi, Pr[[3]], type = "b", pch = 3, lty = 3)
+lines(xi, Pr[[4]], type = "b", pch = 4, lty = 4)
+lines(xi, Pr[[5]], type = "b", pch = 5, lty = 5)
+lines(xi, Pr[[6]], type = "b", pch = 6, lty = 6)
+lines(xi, Pr[[7]], type = "b", pch = 7, lty = 7)
+
+legend("topright",
+       legend = c("h=100", "h=10", "h=2", "h=1", "h=1/2", "h=1/10", "h=1/100"),
+       pch = c(1, 2, 3, 4, 5, 6, 7),
+       lty = c(1, 2, 3, 4, 5, 6, 7),
+       col = c("black", "black", "black", "black", "black"),
+       bty = "n")
+
+dev.off()
+```
