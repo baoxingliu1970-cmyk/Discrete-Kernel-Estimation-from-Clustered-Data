@@ -1,0 +1,475 @@
+---
+title: "Sim Poisson Beta-k5-m60-l10"
+author: "Baoxing Liu"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r message=FALSE,warning=FALSE}
+# ===============================================================
+# Parallel Simulation: SRS vs Clustered Kernel Estimator
+# Using Beta-Poisson Clustered Model (Windows-compatible)
+# ===============================================================
+
+library(tidyverse)
+library(parallel)
+library(scModels)
+
+# ----------------------------
+# 1. Discrete Triangular Kernel
+# ----------------------------
+discrete_triang_kernel <- function(xi, x, h, a) {
+  num <- (a + 1)^h - abs(xi - x)^h
+  num[num < 0] <- 0
+  P_ah <- (2 * a + 1) * (a + 1)^h - 2 * sum((0:a)^h)
+  return(num / P_ah)
+}
+
+discrete_triang_estimator <- function(xi, x, h, a) {
+  mean(discrete_triang_kernel(xi, x, h, a))
+}
+
+# ----------------------------
+# 2. Leave-One-Cluster-Out Estimator
+# ----------------------------
+loco_triang_estimator <- function(x, data, cluster_to_exclude, h, a) {
+  train_data <- data[data$cluster != cluster_to_exclude, ]
+  mean(discrete_triang_kernel(train_data$X, x, h, a))
+}
+
+# ----------------------------
+# 3. Cross-Validation Objective
+# ----------------------------
+cv_objective <- function(h, data, a) {
+  clusters <- unique(data$cluster)
+  n <- nrow(data)
+  sum1 <- 0
+  sum2 <- 0
+  
+  for (c in clusters) {
+    Cc_indices <- which(data$cluster == c)
+    mc <- length(Cc_indices)
+    
+    for (i in Cc_indices) {
+      sum1 <- sum1 + loco_triang_estimator(data$X[i], data, c, h, a)
+    }
+    
+    x_points <- min(data$X):max(data$X)
+    f_squared_sum <- sum(sapply(x_points, function(x) {
+      loco_triang_estimator(x, data, c, h, a)^2
+    }))
+    
+    sum2 <- sum2 + mc * f_squared_sum
+  }
+  
+  cv_val <- -2/n * sum1 + 1/n * sum2
+  return(cv_val)
+}
+
+# ===============================================================
+# 4. Simulation Setup
+# ===============================================================
+
+set.seed(123)
+
+lambda <- 10
+alpha <- 2
+beta <- 3
+
+xs <- 0:27
+k_grid <- 5
+m <- 60
+h_grid <- seq(0.1, 3.0, by = 0.2)
+a <- 1
+B <- 500
+n_cores <- max(1, detectCores() - 1)
+
+# ===============================================================
+# 5. Main Simulation Loop (Windows parLapply)
+# ===============================================================
+
+mse_all <- list()
+mise_all <- list()
+
+for (k in k_grid) {
+  
+  # True pmf under Poisson–Beta
+  f_true <- dpb(x = xs, alpha = alpha, beta = beta, c = lambda)
+  
+  # --------------------------
+  # Create PSOCK cluster
+  # --------------------------
+  cl <- makeCluster(n_cores)
+  
+  # Export all needed variables + functions
+  clusterExport(
+    cl,
+    varlist = c(
+      "k", "m", "xs", "a", "lambda", "alpha", "beta", 
+      "h_grid", "f_true",
+      "discrete_triang_kernel",
+      "discrete_triang_estimator",
+      "loco_triang_estimator",
+      "cv_objective"
+    ),
+    envir = environment()
+  )
+  
+  # Load tidyverse on workers
+  clusterEvalQ(cl, library(tidyverse))
+  
+  # --------------------------
+  # Parallel Monte Carlo
+  # --------------------------
+  res_list <- parLapply(cl, 1:B, function(b) {
+    
+    # Simulate clustered Poisson–Beta model
+    pc <- rbeta(k, alpha, beta)
+    X <- unlist(lapply(pc, function(p) rpois(m, lambda * p)))
+    
+    df_clust <- data.frame(cluster = rep(1:k, each = m), X = X)
+    df_srs   <- data.frame(cluster = 1:(k*m), X = X)
+    
+    # Bandwidth CV
+    cv_scores_srs   <- sapply(h_grid, function(h) cv_objective(h, df_srs, a))
+    cv_scores_clust <- sapply(h_grid, function(h) cv_objective(h, df_clust, a))
+    
+    best_h_srs   <- h_grid[which.min(cv_scores_srs)]
+    best_h_clust <- h_grid[which.min(cv_scores_clust)]
+    
+    # PMF estimates
+    fhat_srs_vals <- sapply(xs,
+        function(x) discrete_triang_estimator(df_srs$X, x, best_h_srs, a))
+    fhat_clust_vals <- sapply(xs,
+        function(x) discrete_triang_estimator(df_clust$X, x, best_h_clust, a))
+    
+    # Errors
+    se_srs   <- (fhat_srs_vals - f_true)^2
+    se_clust <- (fhat_clust_vals - f_true)^2
+    ise_srs    <- sum(se_srs)
+    ise_clust  <- sum(se_clust)
+    
+    list(
+      se_srs = se_srs,
+      se_clust = se_clust,
+      ise_srs = ise_srs,
+      ise_clust = ise_clust
+    )
+  })
+  
+  stopCluster(cl)
+  
+  # --------------------------
+  # Combine results
+  # --------------------------
+  se_srs_mat   <- do.call(cbind, lapply(res_list, `[[`, "se_srs"))
+  se_clust_mat <- do.call(cbind, lapply(res_list, `[[`, "se_clust"))
+  
+  ise_srs   <- sapply(res_list, `[[`, "ise_srs")
+  ise_clust <- sapply(res_list, `[[`, "ise_clust")
+  
+  mse_srs   <- rowMeans(se_srs_mat)
+  mse_clust <- rowMeans(se_clust_mat)
+  
+  mse_df <- data.frame(
+    x = xs,
+    MSE_SRS = mse_srs,
+    MSE_Clustered = mse_clust,
+    k = k
+  ) %>%
+    pivot_longer(cols = c(MSE_SRS, MSE_Clustered),
+                 names_to = "Method", values_to = "MSE")
+  
+  mse_all[[paste0("k", k)]] <- mse_df
+  
+  mise_tbl <- tibble(
+    k = k,
+    Method = c("SRS", "Clustered"),
+    MISE = c(mean(ise_srs), mean(ise_clust)),
+    SD_ISE = c(sd(ise_srs), sd(ise_clust))
+  )
+  
+  mise_all[[paste0("k", k)]] <- mise_tbl
+  
+  cat("Finished k =", k, "\n")
+}
+
+# ===============================================================
+# 6. Save results
+# ===============================================================
+mse_all_df <- bind_rows(mse_all)
+mise_all_df <- bind_rows(mise_all)
+
+write.csv(mse_all_df,  "mse_results_poisson_beta_k5_m60_l10.csv",  row.names = FALSE)
+write.csv(mise_all_df, "mise_results_poisson_beta_k5.m60_l10.csv", row.names = FALSE)
+
+# ===============================================================
+# 7. MSE Plot
+# ===============================================================
+ggplot(mse_all_df, aes(x = x, y = sqrt(MSE), color = Method)) +
+  geom_line() + geom_point(size = 0.5) +
+  facet_grid(k ~., scales = "free_y") +
+  theme_minimal(base_size = 13) +
+  labs(
+    title = "MSE Comparison: SRS vs Clustered Kernel Estimator",
+    subtitle = "Poisson–Beta Cluster Model",
+    x = "x", y = "sqrt(MSE)"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "none"
+  )
+
+# ===============================================================
+# 8. MISE Table
+# ===============================================================
+mise_all_df %>%
+  arrange(k, Method) %>%
+  knitr::kable(caption = "MISE Summary (Poisson–Beta Model)")
+```
+
+```{r message=FALSE,warning=FALSE}
+# ===============================================================
+# Parallel Simulation: SRS vs Clustered Kernel Estimator
+# Using Beta-Poisson Clustered Model (Windows-compatible)
+# ===============================================================
+
+library(tidyverse)
+library(parallel)
+library(scModels)
+
+# ----------------------------
+# 1. Discrete Triangular Kernel
+# ----------------------------
+discrete_triang_kernel <- function(xi, x, h, a) {
+  num <- (a + 1)^h - abs(xi - x)^h
+  num[num < 0] <- 0
+  P_ah <- (2 * a + 1) * (a + 1)^h - 2 * sum((0:a)^h)
+  return(num / P_ah)
+}
+
+discrete_triang_estimator <- function(xi, x, h, a) {
+  mean(discrete_triang_kernel(xi, x, h, a))
+}
+
+# ----------------------------
+# 2. Leave-One-Cluster-Out Estimator
+# ----------------------------
+loco_triang_estimator <- function(x, data, cluster_to_exclude, h, a) {
+  train_data <- data[data$cluster != cluster_to_exclude, ]
+  mean(discrete_triang_kernel(train_data$X, x, h, a))
+}
+
+# ----------------------------
+# 3. Cross-Validation Objective
+# ----------------------------
+cv_objective <- function(h, data, a) {
+  clusters <- unique(data$cluster)
+  n <- nrow(data)
+  sum1 <- 0
+  sum2 <- 0
+  
+  for (c in clusters) {
+    Cc_indices <- which(data$cluster == c)
+    mc <- length(Cc_indices)
+    
+    for (i in Cc_indices) {
+      sum1 <- sum1 + loco_triang_estimator(data$X[i], data, c, h, a)
+    }
+    
+    x_points <- min(data$X):max(data$X)
+    f_squared_sum <- sum(sapply(x_points, function(x) {
+      loco_triang_estimator(x, data, c, h, a)^2
+    }))
+    
+    sum2 <- sum2 + mc * f_squared_sum
+  }
+  
+  cv_val <- -2/n * sum1 + 1/n * sum2
+  return(cv_val)
+}
+
+# ===============================================================
+# 4. Simulation Setup
+# ===============================================================
+
+set.seed(123)
+
+lambda <- 10
+alpha <- 2
+beta <- 3
+
+xs <- 0:27
+k_grid <- 30
+m <- 10
+h_grid <- seq(0.1, 3.0, by = 0.2)
+a <- 1
+B <- 500
+n_cores <- max(1, detectCores() - 1)
+
+# ===============================================================
+# 5. Main Simulation Loop (Windows parLapply)
+# ===============================================================
+
+mse_all <- list()
+mise_all <- list()
+
+for (k in k_grid) {
+  
+  # True pmf under Poisson–Beta
+  f_true <- dpb(x = xs, alpha = alpha, beta = beta, c = lambda)
+  
+  # --------------------------
+  # Create PSOCK cluster
+  # --------------------------
+  cl <- makeCluster(n_cores)
+  
+  # Export all needed variables + functions
+  clusterExport(
+    cl,
+    varlist = c(
+      "k", "m", "xs", "a", "lambda", "alpha", "beta", 
+      "h_grid", "f_true",
+      "discrete_triang_kernel",
+      "discrete_triang_estimator",
+      "loco_triang_estimator",
+      "cv_objective"
+    ),
+    envir = environment()
+  )
+  
+  # Load tidyverse on workers
+  clusterEvalQ(cl, library(tidyverse))
+  
+  # --------------------------
+  # Parallel Monte Carlo
+  # --------------------------
+  res_list <- parLapply(cl, 1:B, function(b) {
+    
+    # Simulate clustered Poisson–Beta model
+    pc <- rbeta(k, alpha, beta)
+    X <- unlist(lapply(pc, function(p) rpois(m, lambda * p)))
+    
+    df_clust <- data.frame(cluster = rep(1:k, each = m), X = X)
+    df_srs   <- data.frame(cluster = 1:(k*m), X = X)
+    
+    # Bandwidth CV
+    cv_scores_srs   <- sapply(h_grid, function(h) cv_objective(h, df_srs, a))
+    cv_scores_clust <- sapply(h_grid, function(h) cv_objective(h, df_clust, a))
+    
+    best_h_srs   <- h_grid[which.min(cv_scores_srs)]
+    best_h_clust <- h_grid[which.min(cv_scores_clust)]
+    
+    # PMF estimates
+    fhat_srs_vals <- sapply(xs,
+        function(x) discrete_triang_estimator(df_srs$X, x, best_h_srs, a))
+    fhat_clust_vals <- sapply(xs,
+        function(x) discrete_triang_estimator(df_clust$X, x, best_h_clust, a))
+    
+    # Errors
+    se_srs   <- (fhat_srs_vals - f_true)^2
+    se_clust <- (fhat_clust_vals - f_true)^2
+    ise_srs    <- sum(se_srs)
+    ise_clust  <- sum(se_clust)
+    
+    list(
+      se_srs = se_srs,
+      se_clust = se_clust,
+      ise_srs = ise_srs,
+      ise_clust = ise_clust
+    )
+  })
+  
+  stopCluster(cl)
+  
+  # --------------------------
+  # Combine results
+  # --------------------------
+  se_srs_mat   <- do.call(cbind, lapply(res_list, `[[`, "se_srs"))
+  se_clust_mat <- do.call(cbind, lapply(res_list, `[[`, "se_clust"))
+  
+  ise_srs   <- sapply(res_list, `[[`, "ise_srs")
+  ise_clust <- sapply(res_list, `[[`, "ise_clust")
+  
+  mse_srs   <- rowMeans(se_srs_mat)
+  mse_clust <- rowMeans(se_clust_mat)
+  
+  mse_df <- data.frame(
+    x = xs,
+    MSE_SRS = mse_srs,
+    MSE_Clustered = mse_clust,
+    k = k
+  ) %>%
+    pivot_longer(cols = c(MSE_SRS, MSE_Clustered),
+                 names_to = "Method", values_to = "MSE")
+  
+  mse_all[[paste0("k", k)]] <- mse_df
+  
+  mise_tbl <- tibble(
+    k = k,
+    Method = c("SRS", "Clustered"),
+    MISE = c(mean(ise_srs), mean(ise_clust)),
+    SD_ISE = c(sd(ise_srs), sd(ise_clust))
+  )
+  
+  mise_all[[paste0("k", k)]] <- mise_tbl
+  
+  cat("Finished k =", k, "\n")
+}
+
+# ===============================================================
+# 6. Save results
+# ===============================================================
+mse_all_df <- bind_rows(mse_all)
+mise_all_df <- bind_rows(mise_all)
+
+write.csv(mse_all_df,  "mse_results_poisson_beta_k30_m10_l10.csv",  row.names = FALSE)
+write.csv(mise_all_df, "mise_results_poisson_beta_k30.m10_l10.csv", row.names = FALSE)
+
+# ===============================================================
+# 7. MSE Plot
+# ===============================================================
+ggplot(mse_all_df, aes(x = x, y = sqrt(MSE), color = Method)) +
+  geom_line() + geom_point(size = 0.5) +
+  facet_grid(k ~., scales = "free_y") +
+  theme_minimal(base_size = 13) +
+  labs(
+    title = "MSE Comparison: SRS vs Clustered Kernel Estimator",
+    subtitle = "Poisson–Beta Cluster Model",
+    x = "x", y = "sqrt(MSE)"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "none"
+  )
+
+# ===============================================================
+# 8. MISE Table
+# ===============================================================
+mise_all_df %>%
+  arrange(k, Method) %>%
+  knitr::kable(caption = "MISE Summary (Poisson–Beta Model)")
+```
+
+```{r}
+df1 = read_csv("mse_results_poisson_beta_k5_m60_l10.csv") %>% 
+  mutate(Method = ifelse(Method=="MSE_SRS", "SRS", "Clustered"))
+df2 = read_csv("mse_results_poisson_beta_k30_m10_l10.csv") %>% 
+  mutate(Method = ifelse(Method=="MSE_SRS", "SRS", "Clustered"))
+df = bind_rows(df1,df2)
+
+p5 = ggplot(df, aes(x = x, y = sqrt(MSE), color = Method)) +
+  geom_line(linewidth=0.25) + geom_point(size = 0.1) +
+  facet_grid(k~.,labeller = label_both) +
+  theme_minimal(base_size = 13) +
+  labs(
+    x = "x",
+    y = "MSE (sqrt)", 
+    caption = expression(" "*rho*" = 0.5") 
+  ) + theme(legend.position = "top")
+ggsave("MSE_Poisson_Beta_bind_rho0.625_n300.pdf",p5)
+```
