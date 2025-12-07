@@ -1,0 +1,282 @@
+---
+title: "Real Data_1"
+author: "Baoxing Liu"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r message=FALSE, warning=FALSE}
+## --- Illustration: SRS vs Clustered PMF kernel estimators (grouseticks) ---
+library(lme4)      # for grouseticks
+library(tidyverse)
+library(kableExtra)
+
+data(grouseticks)
+head(grouseticks)
+
+# Use the column names you showed earlier
+y  <- grouseticks$TICKS   # count variable
+cid <- grouseticks$BROOD # cluster id
+
+# clean missing values if any
+df <- tibble(cluster = cid, X = y) %>% drop_na()
+y <- df$X
+cid <- df$cluster
+
+# ----------------------------
+# Discrete triangular kernel (same form as used earlier)
+# ----------------------------
+discrete_triang_kernel <- function(xi, x, h, a = 1) {
+  # xi: vector of observed counts; x: single support point
+  num <- (a + 1)^h - abs(xi - x)^h
+  num[num < 0] <- 0
+  P_ah <- (2 * a + 1) * (a + 1)^h - 2 * sum((0:a)^h)
+  return(num / P_ah)
+}
+
+discrete_triang_estimator <- function(xi, x, h, a = 1) {
+  mean(discrete_triang_kernel(xi, x, h, a))
+}
+
+# ----------------------------
+# Leave-one-cluster-out CV objective (works when each obs is its own cluster for SRS)
+# same as you used previously
+# ----------------------------
+cv_objective <- function(h, data, a = 1) {
+  clusters <- unique(data$cluster)
+  k <- length(clusters)
+  n <- nrow(data)
+  sum1 <- 0
+  sum2 <- 0
+  
+  for (c in clusters) {
+    Cc_indices <- which(data$cluster == c)
+    mc <- length(Cc_indices)
+    
+    # sum over observations in cluster c of f_{-c}(Xi)
+    for (i in Cc_indices) {
+      sum1 <- sum1 + loco_triang_estimator(data$X[i], data, c, h, a)
+    }
+    
+    # sum of squared f_{-c}(x) on support
+    x_points <- min(data$X):max(data$X)
+    f_squared_sum <- sum(sapply(x_points, function(x) {
+      loco_triang_estimator(x, data, c, h, a)^2
+    }))
+    sum2 <- sum2 + mc * f_squared_sum
+  }
+  
+  cv_val <- -2/n * sum1 + 1/n * sum2
+  return(cv_val)
+}
+
+# helper: leave-one-cluster-out estimator used by CV (used above)
+loco_triang_estimator <- function(x, data, cluster_to_exclude, h, a = 1) {
+  train_data <- data[data$cluster != cluster_to_exclude, ]
+  mean(discrete_triang_kernel(train_data$X, x, h, a))
+}
+
+# ----------------------------
+# Prepare SRS and clustered dataframes for CV
+# For SRS: make cluster = 1:n so cv_objective performs leave-one-out
+# For clustered estimator: cluster = brood (as provided)
+# ----------------------------
+df_srs  <- tibble(cluster = seq_along(y), X = y)   # each obs its own 'cluster' -> LOO
+df_clst <- tibble(cluster = cid, X = y)            # actual brood clusters
+
+# ----------------------------
+# Bandwidth grid and param
+# ----------------------------
+h_grid <- seq(0.01, 0.2, by = 0.01)  # grid — adjust as needed
+a <- 1
+
+# CV bandwidth selection (SRS)
+cv_scores_srs <- sapply(h_grid, function(h) cv_objective(h, df_srs, a))
+best_h_srs <- h_grid[which.min(cv_scores_srs)]
+
+# CV bandwidth selection (Clustered)
+cv_scores_cl <- sapply(h_grid, function(h) cv_objective(h, df_clst, a))
+best_h_clust <- h_grid[which.min(cv_scores_cl)]
+
+cat("Selected bandwidths:\n")
+cat("  SRS best h =", best_h_srs, "\n")
+cat("  Clustered best h =", best_h_clust, "\n\n")
+
+# ----------------------------
+# Compute PMF estimates on grid x = 0:max(y)
+# For SRS estimator: use all observations, estimator = (1/n) sum K(x - Xi)
+# For Clustered estimator: compute cluster-level averages then average across clusters (equal weights)
+# ----------------------------
+xgrid <- min(y):max(y)
+
+# SRS kernel estimator using chosen h (then normalize)
+pmf_srs_unnorm <- sapply(xgrid, function(x) discrete_triang_estimator(y, x, best_h_srs, a))
+pmf_srs <- pmf_srs_unnorm / sum(pmf_srs_unnorm)    # normalize to sum 1
+
+# Clustered estimator: average cluster-level estimates (equal cluster weights)
+cluster_ids <- sort(unique(cid))
+J <- length(cluster_ids)
+pmf_clust_unnorm <- sapply(xgrid, function(x) {
+  cluster_means <- sapply(cluster_ids, function(j) {
+    yj <- y[cid == j]
+    mean(discrete_triang_kernel(yj, x, best_h_clust, a))
+  })
+  mean(cluster_means)    # equal weighting across clusters
+})
+pmf_clust <- pmf_clust_unnorm / sum(pmf_clust_unnorm)
+
+# ----------------------------
+# Put into one tidy data frame for plotting
+# ----------------------------
+pmf_df <- tibble(
+  x = xgrid,
+  SRS = pmf_srs,
+  Clustered = pmf_clust
+) %>%
+  pivot_longer(cols = c(SRS, Clustered), names_to = "Method", values_to = "pmf")
+
+# Save pmf table to CSV for manuscript use
+write_csv(pmf_df, "grouseticks_pmf_estimates2.csv")
+cat("Saved PMF estimates to grouseticks_pmf_estimates2.csv\n")
+
+# ----------------------------
+# Plot: grouped columns for each x (side-by-side bars)
+# ----------------------------
+library(ggplot2)
+
+ggplot(pmf_df, aes(x = factor(x), y = pmf, fill = Method)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.3) +
+  #scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) +
+  labs(
+    title = "Kernel PMF Estimates: SRS vs Clustered (grouseticks)",
+    subtitle = paste0("Bandwidths (CV): SRS h=", best_h_srs, " ; Cluster h=", best_h_clust),
+    x = "Tick count (x)",
+    y = "Estimated PMF"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(size=5),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+```{r}
+df_ticks = read_csv("grouseticks_pmf_estimates2.csv")
+df_ticks = df_ticks %>% pivot_wider(names_from = Method, values_from = pmf)
+
+df1 = data.frame(table(grouseticks$TICKS))  
+df1$Var1 = as.numeric(as.character(df1$Var1))
+df1 = df1 %>% rename(x = Var1) %>% complete(x = min(x):max(x)) %>% 
+  replace_na(list(Freq = 0)) %>% mutate(pmf_empiric = Freq/sum(Freq))
+  
+(ise_srs = sum((df_ticks$SRS - df1$pmf_empiric)^2))  
+(ise_clust = sum((df_ticks$Clustered - df1$pmf_empiric)^2))   
+(Ratio = ise_clust/ise_srs)
+
+df2 = bind_cols(df_ticks, df1$pmf_empiric) %>% rename(pmf_empiric = ...4)
+df4 = df2 %>% mutate(SRS = round(SRS, 5), 
+      Clustered = round(Clustered, 5), pmf_empiric = round(pmf_empiric, 5))
+
+df5 = df4[1:43, ]
+df6 = df4[44:86, ]
+
+table_grouseticks <- df5 %>%
+      kable("latex", booktabs = TRUE, 
+        caption = "SRS and Clustered Kernel PMF Estimates vs Empiric PMF") %>%
+      kable_styling(latex_options = c("striped", "hold_position"))
+writeLines(table_grouseticks, "table_grouseticks_1.tex")
+
+table_grouseticks <- df6 %>%
+      kable("latex", booktabs = TRUE, 
+        caption = "SRS and Clustered Kernel PMF Estimates vs Empiric PMF") %>%
+      kable_styling(latex_options = c("striped", "hold_position"))
+writeLines(table_grouseticks, "table_grouseticks_2.tex")
+
+
+df3 = df2 %>% pivot_longer(cols = c(SRS, Clustered, pmf_empiric), 
+               names_to = "Method", values_to = "pmf")
+
+df_1 = df3[1:66, ]
+df_2 = df3[67:132, ]
+df_3 = df3[133:195, ]
+df_4 = df3[196:258, ]
+
+p1 = ggplot(df_1, aes(x = factor(x), y = pmf, fill = Method)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.3) +
+  #scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) +
+  labs(
+    #title = "SRS and Clustered Kernel PMF Estimates vs True PMF",
+    #subtitle = paste0("Bandwidths (CV): SRS h=", best_h_srs, " ; Cluster h=", best_h_clust),
+    x = "Tick count (x)",
+    y = "PMF"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(size=5),
+    legend.position = "top"
+  )
+ggsave("pmf_real_data1.pdf",p1)
+
+p2 = ggplot(df_2, aes(x = factor(x), y = pmf, fill = Method)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.3) +
+  #scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) +
+  labs(
+    #title = "SRS and Clustered Kernel PMF Estimates vs True PMF",
+    #subtitle = paste0("Bandwidths (CV): SRS h=", best_h_srs, " ; Cluster h=", best_h_clust),
+    x = "Tick count (x)",
+    y = "PMF"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(size=5),
+    legend.position = "top"
+  )
+ggsave("pmf_real_data2.pdf",p2)
+
+p3 = ggplot(df_3, aes(x = factor(x), y = pmf, fill = Method)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.3) +
+  #scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) +
+  labs(
+    #title = "SRS and Clustered Kernel PMF Estimates vs True PMF",
+    #subtitle = paste0("Bandwidths (CV): SRS h=", best_h_srs, " ; Cluster h=", best_h_clust),
+    x = "Tick count (x)",
+    y = "PMF"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(size=5),
+    legend.position = "top"
+  )
+ggsave("pmf_real_data3.pdf",p3)
+
+p4 = ggplot(df_4, aes(x = factor(x), y = pmf, fill = Method)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.3) +
+  #scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) +
+  labs(
+   # title = "SRS and Clustered Kernel PMF Estimates vs True PMF",
+  #  subtitle = paste0("Bandwidths (CV): SRS h=", best_h_srs, " ; Cluster h=", best_h_clust),
+    x = "Tick count (x)",
+    y = "PMF"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(size=5),
+    legend.position = "top"
+  )
+ggsave("pmf_real_data4.pdf",p4)
+
+
+
+
+```
+
+cid = as.numeric(as.character(cid))
+new_cid = ifelse(cid < 511, 1, ifelse(cid < 521, 2, ifelse(cid < 531, 3,                          ifelse(cid < 541, 4, ifelse(cid < 551, 5, ifelse(cid < 561, 6,                          ifelse(cid < 571, 7, ifelse(cid < 581, 8, ifelse(cid < 591, 9,                          ifelse(cid < 601, 10, ifelse(cid < 611, 11, ifelse(cid < 621, 12,
+          ifelse(cid < 631, 13, ifelse(cid < 641, 14, ifelse(cid < 651, 15, 
+          ifelse(cid < 661, 16, ifelse(cid < 671, 17, ifelse(cid < 681, 18, 
+          ifelse(cid < 691, 19, ifelse(cid < 701, 20, ifelse(cid < 711, 21, 
+          ifelse(cid < 721, 22, ifelse(cid < 731, 23, ifelse(cid < 741, 24, 
+          ifelse(cid < 751, 25, cid))))))))))))))))))))))))) 
