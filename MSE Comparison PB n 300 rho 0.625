@@ -230,3 +230,25 @@ mise_all_df %>%
   arrange(k, Method) %>%
   knitr::kable(caption = "MISE Summary (Poisson–Beta Model)")
 ```
+
+```{r}
+df1 = read_csv("mse_results_poisson_beta_a1_b2_l10_k5.csv") %>% 
+  mutate(Method = ifelse(Method=="MSE_SRS", "SRS", "Clustered"))
+df2 = read_csv("mse_results_poisson_beta_a1_b2_l10_k30.csv") %>% 
+  mutate(Method = ifelse(Method=="MSE_SRS", "SRS", "Clustered"))
+df = bind_rows(df1,df2)
+
+p5 = ggplot(df, aes(x = x, y = sqrt(MSE), color = Method)) +
+  geom_line(linewidth=0.25) + geom_point(size = 0.1) +
+  facet_grid(k~.,labeller = label_both) +
+  theme_minimal(base_size = 13) +
+  labs(
+    x = "x",
+    y = "MSE (sqrt)", 
+    caption = expression(" "*rho*" = 0.625") 
+  ) + theme(legend.position = "top")
+ggsave("MSE_Poisson_Beta_bind_rho0.625_n300.pdf",p5)
+``` 
+
+
+
