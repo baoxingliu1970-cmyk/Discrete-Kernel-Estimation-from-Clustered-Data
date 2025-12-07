@@ -1,12 +1,3 @@
----
-title: "Real Data_1"
-author: "Baoxing Liu"
-date: "`r Sys.Date()`"
-output:
-  pdf_document: default
-  html_document: default
----
-
 ```{r message=FALSE, warning=FALSE}
 ## --- Illustration: SRS vs Clustered PMF kernel estimators (grouseticks) ---
 library(lme4)      # for grouseticks
@@ -206,10 +197,7 @@ df_4 = df3[196:258, ]
 
 p1 = ggplot(df_1, aes(x = factor(x), y = pmf, fill = Method)) +
   geom_col(position = position_dodge(width = 0.8), width = 0.3) +
-  #scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) +
   labs(
-    #title = "SRS and Clustered Kernel PMF Estimates vs True PMF",
-    #subtitle = paste0("Bandwidths (CV): SRS h=", best_h_srs, " ; Cluster h=", best_h_clust),
     x = "Tick count (x)",
     y = "PMF"
   ) +
@@ -222,10 +210,7 @@ ggsave("pmf_real_data1.pdf",p1)
 
 p2 = ggplot(df_2, aes(x = factor(x), y = pmf, fill = Method)) +
   geom_col(position = position_dodge(width = 0.8), width = 0.3) +
-  #scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) +
   labs(
-    #title = "SRS and Clustered Kernel PMF Estimates vs True PMF",
-    #subtitle = paste0("Bandwidths (CV): SRS h=", best_h_srs, " ; Cluster h=", best_h_clust),
     x = "Tick count (x)",
     y = "PMF"
   ) +
@@ -238,10 +223,7 @@ ggsave("pmf_real_data2.pdf",p2)
 
 p3 = ggplot(df_3, aes(x = factor(x), y = pmf, fill = Method)) +
   geom_col(position = position_dodge(width = 0.8), width = 0.3) +
-  #scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) +
   labs(
-    #title = "SRS and Clustered Kernel PMF Estimates vs True PMF",
-    #subtitle = paste0("Bandwidths (CV): SRS h=", best_h_srs, " ; Cluster h=", best_h_clust),
     x = "Tick count (x)",
     y = "PMF"
   ) +
@@ -254,10 +236,7 @@ ggsave("pmf_real_data3.pdf",p3)
 
 p4 = ggplot(df_4, aes(x = factor(x), y = pmf, fill = Method)) +
   geom_col(position = position_dodge(width = 0.8), width = 0.3) +
-  #scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) +
   labs(
-   # title = "SRS and Clustered Kernel PMF Estimates vs True PMF",
-  #  subtitle = paste0("Bandwidths (CV): SRS h=", best_h_srs, " ; Cluster h=", best_h_clust),
     x = "Tick count (x)",
     y = "PMF"
   ) +
@@ -267,16 +246,4 @@ p4 = ggplot(df_4, aes(x = factor(x), y = pmf, fill = Method)) +
     legend.position = "top"
   )
 ggsave("pmf_real_data4.pdf",p4)
-
-
-
-
 ```
-
-cid = as.numeric(as.character(cid))
-new_cid = ifelse(cid < 511, 1, ifelse(cid < 521, 2, ifelse(cid < 531, 3,                          ifelse(cid < 541, 4, ifelse(cid < 551, 5, ifelse(cid < 561, 6,                          ifelse(cid < 571, 7, ifelse(cid < 581, 8, ifelse(cid < 591, 9,                          ifelse(cid < 601, 10, ifelse(cid < 611, 11, ifelse(cid < 621, 12,
-          ifelse(cid < 631, 13, ifelse(cid < 641, 14, ifelse(cid < 651, 15, 
-          ifelse(cid < 661, 16, ifelse(cid < 671, 17, ifelse(cid < 681, 18, 
-          ifelse(cid < 691, 19, ifelse(cid < 701, 20, ifelse(cid < 711, 21, 
-          ifelse(cid < 721, 22, ifelse(cid < 731, 23, ifelse(cid < 741, 24, 
-          ifelse(cid < 751, 25, cid))))))))))))))))))))))))) 
